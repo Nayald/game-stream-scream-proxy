@@ -1,0 +1,6 @@
+[submodule "scream"]
+	path = scream
+	url = https://github.com/EricssonResearch/scream.git
+[submodule "concurrentqueue"]
+	path = concurrentqueue
+	url = https://github.com/cameron314/concurrentqueue.git
