@@ -1,8 +1,9 @@
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.16)
 project(scream)
 
 set(CMAKE_CXX_STANDARD 20)
 add_compile_options(-Wall -O0 -march=native -mavx2 -ftree-vectorize)
+add_link_options(-pthread)
 
 add_executable(scream_server
         main_server.cpp
