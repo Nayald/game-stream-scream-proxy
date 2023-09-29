@@ -1,46 +1,47 @@
-//
-// Created by xavier on 1/5/23.
-//
-#include <iostream>
-
-#include "TcpClient.h"
+extern "C" {
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+}
 
 #include <cstring>
 
 #include "logger.h"
+#include "tcp_client.h"
 
-TcpClient::TcpClient(std::string name) : SimpleBlock(std::move(name)) {
+TcpClient::TcpClient(std::string name) : SimpleBlock(std::move(name)) {}
 
-}
-
-TcpClient::~TcpClient() noexcept {
+TcpClient::~TcpClient() {
     if (fd > 0) {
         close(fd);
     }
 }
 
 void TcpClient::init(const std::unordered_map<std::string, std::string> &params) {
-    sockaddr_in src_addr = {AF_INET, 0, {0}, {0}};
-    sockaddr_in dst_addr = {AF_INET, 0, {0}, {0}};
-    for (auto const& [key, val] : params) {
-        logger::log(logger::DEBUG, name ,": ", key, " = ", val);
+    sockaddr_in local_addr = {AF_INET, 0, {}, {}};
+    sockaddr_in remote_addr = {AF_INET, 0, {}, {}};
+    for (auto const &[key, val] : params) {
+        logger::log(logger::DEBUG, name, ": ", key, " = ", val);
         switch (hash(key)) {
             using namespace std::literals;
-            case hash("src_addr"sv):
-                inet_pton(AF_INET, val.c_str(), &src_addr.sin_addr.s_addr);
-                break;
-            case hash("src_port"sv):
-                src_addr.sin_port = htons(std::stoi(val));
-                break;
-            case hash("dst_addr"sv):
-                inet_pton(AF_INET, val.c_str(), &dst_addr.sin_addr.s_addr);
-                break;
-            case hash("dst_port"sv):
-                dst_addr.sin_port = htons(std::stoi(val));
-                break;
-            default:
-                std::cout << name << ": unknown key " << key << std::endl;
-                break;
+        case hash("local_addr"sv):
+            inet_pton(AF_INET, val.c_str(), &local_addr.sin_addr.s_addr);
+            break;
+        case hash("local_port"sv):
+            local_addr.sin_port = htons(std::stoi(val));
+            break;
+        case hash("remote_addr"sv):
+            inet_pton(AF_INET, val.c_str(), &remote_addr.sin_addr.s_addr);
+            break;
+        case hash("remote_port"sv):
+            remote_addr.sin_port = htons(std::stoi(val));
+            break;
+        default:
+            std::cout << name << ": unknown key " << key << std::endl;
+            break;
         }
     }
 
@@ -51,23 +52,24 @@ void TcpClient::init(const std::unordered_map<std::string, std::string> &params)
     }
 
     timeval tv = {.tv_sec = 0, .tv_usec = 100'000};
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv) < 0) {
-        std::cerr << name << ": fail to set socket timeout -> " << std::strerror(errno) << std::endl;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv) < 0) {
+        logger::log(logger::ERROR, name, ": fail to set socket timeout -> ", std::strerror(errno));
     }
 
-    if (bind(fd, (const sockaddr *) &src_addr, sizeof(src_addr)) < 0) {
-        std::cerr << name << ": fail to bind socket -> " << std::strerror(errno) << std::endl;
+    if (bind(fd, (const sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
+        logger::log(logger::ERROR, name, ": fail to bind socket -> ", std::strerror(errno));
     }
 
-    if (connect(fd, (const sockaddr*)(&dst_addr), sizeof(dst_addr)) < 0) {
-        std::cerr << name << ": fail to connect socket -> " << std::strerror(errno) << std::endl;
+    if (connect(fd, (const sockaddr *)(&remote_addr), sizeof(remote_addr)) < 0) {
+        logger::log(logger::ERROR, name, ": fail to connect socket -> ", std::strerror(errno));
     }
 
-    char src_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &src_addr.sin_addr.s_addr, src_ip, INET_ADDRSTRLEN);
-    char dst_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &dst_addr.sin_addr.s_addr, dst_ip, INET_ADDRSTRLEN);
-    logger::log(logger::INFO, name, ": will receive data on ", src_ip, ':', ntohs(src_addr.sin_port), " and send data to ", dst_ip, ':', ntohs(dst_addr.sin_port));
+    char local_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &local_addr.sin_addr.s_addr, local_ip, INET_ADDRSTRLEN);
+    char remote_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &remote_addr.sin_addr.s_addr, remote_ip, INET_ADDRSTRLEN);
+    logger::log(logger::INFO, name, ": will receive data on ", local_ip, ':', ntohs(local_addr.sin_port), " and send data to ", remote_ip, ':',
+                ntohs(remote_addr.sin_port));
 
     initialized = true;
 }
@@ -123,7 +125,7 @@ void TcpClient::read() {
             continue;
         }
 
-        //std::memcpy(buffer + offset, rx_buffer, ret);
+        // std::memcpy(buffer + offset, rx_buffer, ret);
         offset += ret;
 
         size_t start_offset = 0;
@@ -135,7 +137,7 @@ void TcpClient::read() {
                 continue;
             }
 
-            msg_size = ntohs(*reinterpret_cast<uint16_t*>(buffer + start_offset + sizeof(delimiter)));
+            msg_size = ntohs(*reinterpret_cast<uint16_t *>(buffer + start_offset + sizeof(delimiter)));
             // incomplete message
             if (start_offset + msg_size + sizeof(msg_size) + sizeof(delimiter) > offset) {
                 break;

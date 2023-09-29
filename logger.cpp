@@ -1,13 +1,14 @@
-#include "logger.h"
-#include <iostream>
 #include <array>
+#include <iostream>
+
+#include "logger.h"
 
 namespace logger {
-    spinlock lock;
-    std::ofstream file;
-    bool is_tee = true;
-    Level level = INFO;
-}
+spinlock lock;
+std::ofstream file;
+bool is_tee = true;
+Level level = INFO;
+} // namespace logger
 
 void logger::setFilename(const std::string &filename) {
     lock.lock();
@@ -18,13 +19,9 @@ void logger::setFilename(const std::string &filename) {
     lock.unlock();
 }
 
-void logger::isTee(bool state) {
-    is_tee = state;
-};
+void logger::isTee(bool state) { is_tee = state; };
 
-void logger::setMinimalLogLevel(Level l) {
-    level = l;
-}
+void logger::setMinimalLogLevel(Level l) { level = l; }
 
 void logger::log(Level l, const char *msg) {
     static const std::array LEVEL_OUTPUT_STRINGS = {"[DEBUG] ", "[INFO] ", "[WARNING] ", "[ERROR] "};

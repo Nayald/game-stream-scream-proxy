@@ -1,11 +1,6 @@
-//
-// Created by xavier on 1/25/23.
-//
+#include "msg_type_converter.h"
 
-#include "MsgTypeConverter.h"
-
-template<>
-std::shared_ptr<Msg> MsgTypeConverter<Msg::BITRATE_REQUEST, Msg::RAW>::convert(const std::shared_ptr<const Msg> &msg) {
+template <> std::shared_ptr<Msg> MsgTypeConverter<Msg::BITRATE_REQUEST, Msg::RAW>::convert(const std::shared_ptr<const Msg> &msg) {
     auto msg2 = std::make_shared<Msg>();
     msg2->type = Msg::RAW;
     msg2->data = aligned_alloc(64, 64);
@@ -18,8 +13,7 @@ std::shared_ptr<Msg> MsgTypeConverter<Msg::BITRATE_REQUEST, Msg::RAW>::convert(c
     return msg2;
 }
 
-template<>
-std::shared_ptr<Msg> MsgTypeConverter<Msg::IFRAME_REQUEST, Msg::RAW>::convert(const std::shared_ptr<const Msg> &msg) {
+template <> std::shared_ptr<Msg> MsgTypeConverter<Msg::IFRAME_REQUEST, Msg::RAW>::convert(const std::shared_ptr<const Msg> &msg) {
     static constexpr std::string_view json = R"({"t":"n","v":-1})";
     auto msg2 = std::make_shared<Msg>();
     msg2->type = Msg::RAW;

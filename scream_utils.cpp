@@ -1,16 +1,14 @@
-//
-// Created by xavier on 1/17/23.
-//
+extern "C" {
+#include <sys/time.h>
+}
+
+#include <cstdlib>
 
 #include "scream_utils.h"
-#include <sys/time.h>
-#include <cstdlib>
 
 double t0 = 0;
 
-void packet_free(void *buf, uint32_t ssrc) {
-    free(buf);
-}
+void packet_free(void *buf, uint32_t ssrc) { free(buf); }
 
 uint32_t getTimeInNtp() {
     timeval tp;

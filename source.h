@@ -1,7 +1,3 @@
-//
-// Created by xavier on 11/30/22.
-//
-
 #ifndef SCREAM_SOURCE_H
 #define SCREAM_SOURCE_H
 
@@ -37,11 +33,7 @@ struct Msg {
 using MsgQueue = moodycamel::BlockingConcurrentQueue<std::shared_ptr<const Msg>>;
 
 class Source {
-private:
-    std::unordered_map<Msg::MsgType, std::unordered_set<std::shared_ptr<MsgQueue>>> other_queues;
-    spinlock lock;
-
-public:
+  public:
     explicit Source() = default;
     virtual ~Source() = default;
 
@@ -73,6 +65,10 @@ public:
         }
         lock.unlock();
     }
+
+  private:
+    std::unordered_map<Msg::MsgType, std::unordered_set<std::shared_ptr<MsgQueue>>> other_queues;
+    spinlock lock;
 };
 
-#endif //SCREAM_SOURCE_H
+#endif // SCREAM_SOURCE_H

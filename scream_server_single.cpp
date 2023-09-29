@@ -1,26 +1,26 @@
-//
-// Created by xavier on 12/2/22.
-//
-
-#include "ScreamServerSingle.h"
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+extern "C" {
 #include <arpa/inet.h>
-#include <cstring>
 #include <byteswap.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+}
+
+#include <cstring>
 
 #include "logger.h"
+#include "scream_server_single.h"
 #include "scream_utils.h"
 
 constexpr uint32_t SSRC = 100;
 
-ScreamServerSingle::ScreamServerSingle(std::string &&name, bool ecn, bool new_cc) : SimpleBlock(std::forward<std::string>(name)), ecn(ecn), scream(0.9f, 0.9f, 0.06f, false, 1.0f, 10.0f, 12500, 1.25f, 20, ecn, false, false, 2.0f, new_cc) {
+ScreamServerSingle::ScreamServerSingle(std::string name, bool l4s, bool new_cc)
+    : SimpleBlock(std::forward<std::string>(name)), l4s(l4s),
+      scream(0.9f, 0.9f, 0.06f, false, 1.0f, 10.0f, 12500, 1.25f, 20, l4s, false, false, 2.0f, new_cc) {}
 
-}
-
-ScreamServerSingle::~ScreamServerSingle() noexcept {
+ScreamServerSingle::~ScreamServerSingle() {
     if (fd >= 0) {
         close(fd);
     }
@@ -32,39 +32,39 @@ void ScreamServerSingle::init(const std::unordered_map<std::string, std::string>
         return;
     }
 
-    sockaddr_in src_addr = {AF_INET, 0, {0}, {0}};
-    sockaddr_in dst_addr = {AF_INET, 0, {0}, {0}};
+    sockaddr_in local_addr = {AF_INET, 0, {}, {}};
+    sockaddr_in remote_addr = {AF_INET, 0, {}, {}};
     float max_bitrate = 30e6f;
     float min_bitrate = 1e6f;
     float start_bitrate = min_bitrate;
-    for (auto const& [key, val] : params) {
+    for (auto const &[key, val] : params) {
         logger::log(logger::DEBUG, name, ": ", key, " = ", val);
         switch (hash(key)) {
             using namespace std::literals;
-            case hash("src_addr"sv):
-                inet_pton(AF_INET, val.c_str(), &src_addr.sin_addr.s_addr);
-                break;
-            case hash("src_port"sv):
-                src_addr.sin_port = htons(std::stoi(val));
-                break;
-            case hash("dst_addr"sv):
-                inet_pton(AF_INET, val.c_str(), &dst_addr.sin_addr.s_addr);
-                break;
-            case hash("dst_port"sv):
-                dst_addr.sin_port = htons(std::stoi(val));
-                break;
-            case hash("max_bitrate"sv):
-                max_bitrate = std::stof(val);
-                break;
-            case hash("min_bitrate"sv):
-                min_bitrate = std::stof(val);
-                break;
-            case hash("start_bitrate"sv):
-                start_bitrate = std::stof(val);
-                break;
-            default:
-                logger::log(logger::WARNING, name, ": unknown key ", key);
-                break;
+        case hash("local_addr"sv):
+            inet_pton(AF_INET, val.c_str(), &local_addr.sin_addr.s_addr);
+            break;
+        case hash("local_port"sv):
+            local_addr.sin_port = htons(std::stoi(val));
+            break;
+        case hash("remote_addr"sv):
+            inet_pton(AF_INET, val.c_str(), &remote_addr.sin_addr.s_addr);
+            break;
+        case hash("remote_port"sv):
+            remote_addr.sin_port = htons(std::stoi(val));
+            break;
+        case hash("max_bitrate"sv):
+            max_bitrate = std::stof(val);
+            break;
+        case hash("min_bitrate"sv):
+            min_bitrate = std::stof(val);
+            break;
+        case hash("start_bitrate"sv):
+            start_bitrate = std::stof(val);
+            break;
+        default:
+            logger::log(logger::WARNING, name, ": unknown key ", key);
+            break;
         }
     }
 
@@ -83,26 +83,25 @@ void ScreamServerSingle::init(const std::unordered_map<std::string, std::string>
         logger::log(logger::ERROR, name, ": fail to set socket timeout -> ", std::strerror(errno));
     }
 
-    if (ecn) {
-        const int ect = 1; // ECN_ECT_0 = 2, ECN_ECT_1 = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_TOS, &ect, sizeof(ect)) < 0) {
-            logger::log(logger::ERROR, name, ": fail to set ecn ect bit -> ", std::strerror(errno));
-        }
+    const int ect = l4s ? 1 : 2; // ECN_ECT_0 = 2, ECN_ECT_1 = 1;
+    if (setsockopt(fd, IPPROTO_IP, IP_TOS, &ect, sizeof(ect)) < 0) {
+        logger::log(logger::ERROR, name, ": fail to set ecn ect bit -> ", std::strerror(errno));
     }
 
-    if (bind(fd, (const sockaddr*)&src_addr, sizeof(src_addr)) < 0) {
+    if (bind(fd, (const sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
         logger::log(logger::ERROR, name, ": fail to bind socket -> ", std::strerror(errno));
     }
 
-    if (connect(fd, (const sockaddr*)(&dst_addr), sizeof(dst_addr)) < 0) {
+    if (connect(fd, (const sockaddr *)(&remote_addr), sizeof(remote_addr)) < 0) {
         logger::log(logger::ERROR, name, ": fail to connect socket -> ", std::strerror(errno));
     }
 
-    char src_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &src_addr.sin_addr.s_addr, src_ip, INET_ADDRSTRLEN);
-    char dst_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &dst_addr.sin_addr.s_addr, dst_ip, INET_ADDRSTRLEN);
-    logger::log(logger::INFO, name, ": will listen on ", src_ip, ':', ntohs(src_addr.sin_port), " and send data to ", dst_ip, ':', ntohs(dst_addr.sin_port));
+    char local_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &local_addr.sin_addr.s_addr, local_ip, INET_ADDRSTRLEN);
+    char remote_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &remote_addr.sin_addr.s_addr, remote_ip, INET_ADDRSTRLEN);
+    logger::log(logger::INFO, name, ": will listen on ", local_ip, ':', ntohs(local_addr.sin_port), " and send data to ", remote_ip, ':',
+                ntohs(remote_addr.sin_port));
 
     if (max_bitrate > 100e6f) {
         max_bitrate = 100e6f;
@@ -128,9 +127,9 @@ void ScreamServerSingle::init(const std::unordered_map<std::string, std::string>
         start_bitrate = max_bitrate;
     }
 
-    scream.registerNewStream(&rtp_queue, SSRC, 1.0f, min_bitrate, start_bitrate, max_bitrate,
-                             10e6, 0.5f, 0.2f, 0.1f, 0.05f, 0.9f, 0.9f, false, 0.0f);
-    logger::log(logger::INFO, name, ": scream will contain bitrate in the range [", static_cast<uint32_t>(min_bitrate), ", ", static_cast<uint32_t>(max_bitrate), "] with a starting value of ", static_cast<uint32_t>(start_bitrate));
+    scream.registerNewStream(&rtp_queue, SSRC, 1.0f, min_bitrate, start_bitrate, max_bitrate, 10e6, 0.5f, 0.2f, 0.1f, 0.05f, 0.9f, 0.9f, false, 0.0f);
+    logger::log(logger::INFO, name, ": scream will contain bitrate in the range [", static_cast<uint32_t>(min_bitrate), ", ",
+                static_cast<uint32_t>(max_bitrate), "] with a starting value of ", static_cast<uint32_t>(start_bitrate));
     initialized = true;
 }
 
@@ -142,7 +141,7 @@ void ScreamServerSingle::run() {
 
     logger::log(logger::DEBUG, name, ": listen thread pid is ", gettid());
     std::shared_ptr<const Msg> msg;
-    while(!stop_condition.load(std::memory_order::relaxed)) {
+    while (!stop_condition.load(std::memory_order::relaxed)) {
         if (!own_queue->wait_dequeue_timed(msg, WAIT_TIMEOUT_DELAY)) {
             continue;
         }
@@ -162,10 +161,11 @@ void ScreamServerSingle::run() {
         const bool marker = rtp_data[1] >> 7;
         const uint8_t payload_type = rtp_data[1] & 0b01111111;
 
-        const uint16_t sequence_number = ntohs(*reinterpret_cast<const uint16_t*>(rtp_data + 2));
-        const uint32_t timestamp = ntohl(*reinterpret_cast<const uint32_t*>(rtp_data + 4));
-        const uint32_t ssrc = ntohl(*reinterpret_cast<const uint32_t*>(rtp_data + 8));
-        const size_t header_size = 12 + 4 * scrc_count + extension * 4 * ntohs(*reinterpret_cast<const uint16_t *>(rtp_data + 12 + 4 * scrc_count + 2));
+        const uint16_t sequence_number = ntohs(*reinterpret_cast<const uint16_t *>(rtp_data + 2));
+        const uint32_t timestamp = ntohl(*reinterpret_cast<const uint32_t *>(rtp_data + 4));
+        const uint32_t ssrc = ntohl(*reinterpret_cast<const uint32_t *>(rtp_data + 8));
+        const size_t header_size =
+            12 + 4 * scrc_count + extension * 4 * ntohs(*reinterpret_cast<const uint16_t *>(rtp_data + 12 + 4 * scrc_count + 2));
 
         /*std::cout << "new rtp packet: "
         << "version=" << (int)version
@@ -210,7 +210,8 @@ void ScreamServerSingle::lookup() {
         lock.lock();
         float can_transmit = scream.isOkToTransmit(getTimeInNtp(), ssrc);
         while (can_transmit == 0 && rtp_queue.sizeOfQueue() > 0) {
-            if (rtp_queue.pop(&data, size, ssrc, seq, is_marked)) { ;
+            if (rtp_queue.pop(&data, size, ssrc, seq, is_marked)) {
+                ;
                 send(fd, data, size, 0);
                 can_transmit = scream.addTransmitted(getTimeInNtp(), ssrc, size, seq, is_marked);
             } else {
@@ -219,7 +220,7 @@ void ScreamServerSingle::lookup() {
         }
 
         lock.unlock();
-        //std::this_thread::sleep_until(start + std::chrono::duration<float>(can_transmit > 0 ? can_transmit : 500e-6));
+        // std::this_thread::sleep_until(start + std::chrono::duration<float>(can_transmit > 0 ? can_transmit : 500e-6));
         std::this_thread::sleep_until(start + std::chrono::microseconds(10));
     }
 }

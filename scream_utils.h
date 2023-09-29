@@ -1,7 +1,3 @@
-//
-// Created by xavier on 1/17/23.
-//
-
 #ifndef SCREAM_SCREAM_UTILS_H
 #define SCREAM_SCREAM_UTILS_H
 
@@ -13,4 +9,4 @@ uint32_t getTimeInNtp();
 
 void initT0();
 
-#endif //SCREAM_SCREAM_UTILS_H
+#endif // SCREAM_SCREAM_UTILS_H

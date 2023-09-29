@@ -1,22 +1,20 @@
-//
-// Created by xavier on 12/28/22.
-//
+extern "C" {
+#include <netinet/in.h>
+#include <pthread.h>
+#include <unistd.h>
+}
 
+#include <cstring>
 #include <iostream>
 #include <random>
-#include <cstring>
-#include <netinet/in.h>
 
-#include "BasicRtpGenerator.h"
-
+#include "basic_rtp_generator.h"
 #include "logger.h"
 #include "scream_utils.h"
 
 constexpr size_t BUFFER_SIZE = 1408; // 64 * 22
 
-BasicRtpGenerator::BasicRtpGenerator(std::string &&name) : SimpleBlock(std::forward<std::string>(name)) {
-
-}
+BasicRtpGenerator::BasicRtpGenerator(std::string name) : SimpleBlock(std::forward<std::string>(name)) {}
 
 void BasicRtpGenerator::init(const std::unordered_map<std::string, std::string> &params) {
     if (!stop_condition.load(std::memory_order::relaxed)) {
@@ -30,47 +28,39 @@ void BasicRtpGenerator::init(const std::unordered_map<std::string, std::string> 
     ssrc = 0;
     seq_number = 0;
     timestamp = 0;
-    for (const auto& [key, val] : params) {
+    for (const auto &[key, val] : params) {
         logger::log(logger::DEBUG, name, ": ", key, " = ", val);
         switch (hash(key)) {
             using namespace std::literals;
-            case hash("type"sv): {
-                static const std::unordered_map<std::string, RtpType> RTPTYPE_MAPPING = {
-                        {"audio", AUDIO},
-                        {"Audio", AUDIO},
-                        {"AUDIO", AUDIO},
-                        {"a", AUDIO},
-                        {"A", AUDIO},
-                        {"video", VIDEO},
-                        {"Video", VIDEO},
-                        {"VIDEO", VIDEO},
-                        {"v", VIDEO},
-                        {"V", VIDEO},
-                };
+        case hash("type"sv): {
+            static const std::unordered_map<std::string, RtpType> RTPTYPE_MAPPING = {
+                {"audio", AUDIO}, {"Audio", AUDIO}, {"AUDIO", AUDIO}, {"a", AUDIO}, {"A", AUDIO},
+                {"video", VIDEO}, {"Video", VIDEO}, {"VIDEO", VIDEO}, {"v", VIDEO}, {"V", VIDEO},
+            };
 
-                const auto it = RTPTYPE_MAPPING.find(val);
-                type = it != RTPTYPE_MAPPING.end() ? it->second : NONE;
-                break;
-            }
-            case hash("bitrate"sv): {
-                bitrate = std::stoi(val);
-                break;
-            }
-            case hash("framerate"sv): {
-                framerate = std::stod(val);
-                break;
-            }
-            case hash("clock_freq"sv): {
-                clock_freq = std::stoi(val);
-                break;
-            }
-            case hash("ssrc"sv): {
-                ssrc = std::stoi(val);
-                break;
-            }
-            default: {
-                logger::log(logger::WARNING, name, ": unknown key ", key);
-            }
+            const auto it = RTPTYPE_MAPPING.find(val);
+            type = it != RTPTYPE_MAPPING.end() ? it->second : NONE;
+            break;
+        }
+        case hash("bitrate"sv): {
+            bitrate = std::stoi(val);
+            break;
+        }
+        case hash("framerate"sv): {
+            framerate = std::stod(val);
+            break;
+        }
+        case hash("clock_freq"sv): {
+            clock_freq = std::stoi(val);
+            break;
+        }
+        case hash("ssrc"sv): {
+            ssrc = std::stoi(val);
+            break;
+        }
+        default: {
+            logger::log(logger::WARNING, name, ": unknown key ", key);
+        }
         }
     }
 
@@ -100,7 +90,8 @@ void BasicRtpGenerator::init(const std::unordered_map<std::string, std::string> 
         ssrc = dist(mt);
     }
 
-    logger::log(logger::INFO, name, ": initialized with values {bitrate=", bitrate, ", framerate=", framerate, ", ssrc=", ssrc, ", clock_freq=", clock_freq, '}');
+    logger::log(logger::INFO, name, ": initialized with values {bitrate=", bitrate, ", framerate=", framerate, ", ssrc=", ssrc,
+                ", clock_freq=", clock_freq, '}');
     initialized = true;
 }
 
@@ -116,17 +107,17 @@ void BasicRtpGenerator::run() {
         buffer[0] = 0b10000000;
         buffer[1] = 0b01100000 + (type == AUDIO);
         //*reinterpret_cast<uint32_t*>(buffer + 4) = htonl(timestamp);
-        *reinterpret_cast<uint32_t*>(buffer + 4) = htonl(static_cast<uint32_t>(getTimeInNtp() / 65536.0 * 90000));
-        //timestamp += static_cast<uint32_t>(round(clock_freq / framerate));
-        *reinterpret_cast<uint32_t*>(buffer + 8) = htonl(ssrc);
+        *reinterpret_cast<uint32_t *>(buffer + 4) = htonl(static_cast<uint32_t>(getTimeInNtp() / 65536.0 * 90000));
+        // timestamp += static_cast<uint32_t>(round(clock_freq / framerate));
+        *reinterpret_cast<uint32_t *>(buffer + 8) = htonl(ssrc);
         while (frame_size > 0) {
             auto msg = std::make_shared<Msg>();
             msg->extra = getTimeInNtp();
             msg->type = Msg::RTP_PACKET;
-            msg->size = frame_size <= 1396 ? frame_size: 1396; // payload size
+            msg->size = frame_size <= 1396 ? frame_size : 1396; // payload size
             frame_size -= msg->size;
             buffer[1] |= uint8_t{frame_size <= 0} << 7;
-            *reinterpret_cast<uint16_t*>(buffer + 2) = htons(seq_number++);
+            *reinterpret_cast<uint16_t *>(buffer + 2) = htons(seq_number++);
             msg->size += 12; // header size
             msg->data = std::aligned_alloc(64, msg->size);
             std::memcpy(msg->data, buffer, msg->size);
@@ -148,13 +139,13 @@ void BasicRtpGenerator::listen() {
         }
 
         switch (msg->type) {
-            case Msg::BITRATE_REQUEST:
-                bitrate.store(msg->size, std::memory_order::relaxed);
-                //std::cout << name << ": set bitrate to " << msg->size << std::endl;
-                break;
-            default:
-                logger::log(logger::DEBUG, name, ": got unknown message type");
-                break;
+        case Msg::BITRATE_REQUEST:
+            bitrate.store(msg->size, std::memory_order::relaxed);
+            // std::cout << name << ": set bitrate to " << msg->size << std::endl;
+            break;
+        default:
+            logger::log(logger::DEBUG, name, ": got unknown message type");
+            break;
         }
 
         if (uint32_t time = getTimeInNtp(); time - last_log > 2 * 65536) {

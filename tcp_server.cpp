@@ -1,17 +1,20 @@
-//
-// Created by xavier on 1/5/23.
-//
-#include "TcpServer.h"
+extern "C" {
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+}
 
 #include <cstring>
 
 #include "logger.h"
+#include "tcp_server.h"
 
-TcpServer::TcpServer(std::string name) : SimpleBlock(std::move(name)) {
+TcpServer::TcpServer(std::string name) : SimpleBlock(std::move(name)) {}
 
-}
-
-TcpServer::~TcpServer() noexcept {
+TcpServer::~TcpServer() {
     if (client_fd >= 0) {
         close(client_fd);
     }
@@ -22,20 +25,20 @@ TcpServer::~TcpServer() noexcept {
 }
 
 void TcpServer::init(const std::unordered_map<std::string, std::string> &params) {
-    sockaddr_in src_addr = {AF_INET, 0, {0}, {0}};
-    for (auto const& [key, val] : params) {
-        logger::log(logger::DEBUG, name ,": ", key, " = ", val);
+    sockaddr_in local_addr = {AF_INET, 0, {}, {}};
+    for (auto const &[key, val] : params) {
+        logger::log(logger::DEBUG, name, ": ", key, " = ", val);
         switch (hash(key)) {
             using namespace std::literals;
-            case hash("src_addr"sv):
-                inet_pton(AF_INET, val.c_str(), &src_addr.sin_addr.s_addr);
-                break;
-            case hash("src_port"sv):
-                src_addr.sin_port = htons(std::stoi(val));
-                break;
-            default:
-                logger::log(logger::WARNING, name, ": unknown key ", key);
-                break;
+        case hash("local_addr"sv):
+            inet_pton(AF_INET, val.c_str(), &local_addr.sin_addr.s_addr);
+            break;
+        case hash("local_port"sv):
+            local_addr.sin_port = htons(std::stoi(val));
+            break;
+        default:
+            logger::log(logger::WARNING, name, ": unknown key ", key);
+            break;
         }
     }
 
@@ -56,11 +59,11 @@ void TcpServer::init(const std::unordered_map<std::string, std::string> &params)
     }
 
     timeval tv = {.tv_sec = 0, .tv_usec = 100'000};
-    if (setsockopt(listen_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv) < 0) {
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv) < 0) {
         logger::log(logger::ERROR, name, ": fail to set socket timeout -> ", std::strerror(errno));
     }
 
-    if (bind(listen_fd, (const sockaddr*)&src_addr, sizeof(src_addr)) < 0) {
+    if (bind(listen_fd, (const sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
         logger::log(logger::ERROR, name, ": fail to bind socket -> ", std::strerror(errno));
     }
 
@@ -68,9 +71,9 @@ void TcpServer::init(const std::unordered_map<std::string, std::string> &params)
         logger::log(logger::ERROR, name, ": fail to listen socket -> ", std::strerror(errno));
     }
 
-    char src_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &src_addr.sin_addr.s_addr, src_ip, INET_ADDRSTRLEN);
-    logger::log(logger::INFO, name, ": will wait for connection on ", src_ip, ':', ntohs(src_addr.sin_port));
+    char local_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &local_addr.sin_addr.s_addr, local_ip, INET_ADDRSTRLEN);
+    logger::log(logger::INFO, name, ": will wait for connection on ", local_ip, ':', ntohs(local_addr.sin_port));
 
     initialized = true;
 }
@@ -121,7 +124,7 @@ void TcpServer::read() {
         if (client_error.load(std::memory_order::relaxed)) {
             logger::log(logger::DEBUG, name, ": read thread enters into sleep mode");
             std::unique_lock lk(read_m);
-            read_cv.wait(lk, [&error = client_error, &stop = stop_condition]{
+            read_cv.wait(lk, [&error = client_error, &stop = stop_condition] {
                 return !error.load(std::memory_order::relaxed) || stop.load(std::memory_order::relaxed);
             });
             logger::log(logger::DEBUG, name, ": read thread exits from sleep mode");
@@ -143,7 +146,7 @@ void TcpServer::read() {
             continue;
         }
 
-        //std::memcpy(buffer + offset, rx_buffer, ret);
+        // std::memcpy(buffer + offset, rx_buffer, ret);
         offset += ret;
 
         size_t start_offset = 0;
@@ -155,7 +158,7 @@ void TcpServer::read() {
                 continue;
             }
 
-            msg_size = ntohs(*reinterpret_cast<uint16_t*>(buffer + start_offset + sizeof(delimiter)));
+            msg_size = ntohs(*reinterpret_cast<uint16_t *>(buffer + start_offset + sizeof(delimiter)));
             // incomplete message
             if (start_offset + msg_size + sizeof(msg_size) + sizeof(delimiter) > offset) {
                 break;
@@ -180,22 +183,22 @@ void TcpServer::read() {
 
 void TcpServer::accept_client() {
     logger::log(logger::INFO, name, ": spawn an additional thread for accept operation with id", gettid());
-    sockaddr_in dst_addr;
-    socklen_t len;
-    char dst_ip[INET_ADDRSTRLEN];
+    sockaddr_in remote_addr;
+    socklen_t len = sizeof(remote_addr);
+    char remote_ip[INET_ADDRSTRLEN];
     int ret;
     while (!stop_condition.load(std::memory_order::relaxed)) {
-        while ((ret = accept(listen_fd, reinterpret_cast<sockaddr *>(&dst_addr), &len)) >= 0) {
+        while ((ret = accept(listen_fd, reinterpret_cast<sockaddr *>(&remote_addr), &len)) >= 0) {
             // if already one client connected just close incoming connection
             if (client_error.load(std::memory_order::relaxed)) {
                 if (int fd = client_fd.exchange(ret, std::memory_order::acquire); fd >= 0) {
                     close(fd);
                 }
 
-                inet_ntop(AF_INET, &dst_addr.sin_addr, dst_ip, INET_ADDRSTRLEN);
-                logger::log(logger::INFO, name, ": connection from ", dst_ip, ':', htons(dst_addr.sin_port), " accepted");
+                inet_ntop(AF_INET, &remote_addr.sin_addr, remote_ip, INET_ADDRSTRLEN);
+                logger::log(logger::INFO, name, ": connection from ", remote_ip, ':', htons(remote_addr.sin_port), " accepted");
                 timeval tv = {.tv_sec = 0, .tv_usec = 100'000};
-                if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof tv) < 0) {
+                if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv) < 0) {
                     logger::log(logger::ERROR, name, ": fail to set client socket timeout -> ", std::strerror(errno));
                 }
                 client_error.store(false, std::memory_order::release);

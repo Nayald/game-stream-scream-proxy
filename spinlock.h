@@ -1,5 +1,5 @@
-#ifndef REMOTE_CLIENT_SPINLOCK_H
-#define REMOTE_CLIENT_SPINLOCK_H
+#ifndef SCREAM_SPINLOCK_H
+#define SCREAM_SPINLOCK_H
 
 #include <atomic>
 
@@ -25,13 +25,10 @@ struct spinlock {
     bool try_lock() noexcept {
         // First do a relaxed load to check if lock is free in order to prevent
         // unnecessary cache misses if someone does while(!try_lock())
-        return !lock_.load(std::memory_order_relaxed) &&
-               !lock_.exchange(true, std::memory_order_acquire);
+        return !lock_.load(std::memory_order_relaxed) && !lock_.exchange(true, std::memory_order_acquire);
     }
 
-    void unlock() noexcept {
-        lock_.store(false, std::memory_order_release);
-    }
+    void unlock() noexcept { lock_.store(false, std::memory_order_release); }
 };
 
-#endif //REMOTE_CLIENT_SPINLOCK_H
+#endif // SCREAM_SPINLOCK_H
