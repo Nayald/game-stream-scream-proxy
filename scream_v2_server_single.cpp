@@ -17,7 +17,7 @@ extern "C" {
 constexpr uint32_t SSRC = 100;
 
 ScreamV2ServerSingle::ScreamV2ServerSingle(std::string name, bool l4s)
-    : SimpleBlock(std::move(name)), scream(0.7f, 0.7f, 0.06f, 12500, 1.5f, 1.5f, 2.0f, 0.05f, l4s, false, false, false) {}
+    : SimpleBlock(std::move(name)), l4s(l4s), scream(0.7f, 0.7f, 0.06f, 12500, 1.5f, 1.5f, 2.0f, 0.05f, l4s, false, false, false) {}
 
 ScreamV2ServerSingle::~ScreamV2ServerSingle() {
     if (fd >= 0) {
