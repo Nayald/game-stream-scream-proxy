@@ -129,6 +129,8 @@ void ScreamV2ServerSingle::init(const std::unordered_map<std::string, std::strin
     scream.registerNewStream(&rtp_queue, SSRC, 1.0f, min_bitrate, start_bitrate, max_bitrate, 0.2f, false, 0.0f);
     logger::log(logger::INFO, name, ": scream will contain bitrate in the range [", static_cast<uint32_t>(min_bitrate), ", ",
                 static_cast<uint32_t>(max_bitrate), "] with a starting value of ", static_cast<uint32_t>(start_bitrate));
+    /*static FILE *file = fopen("log.txt", "w");
+    scream.setDetailedLogFp(file);*/
     initialized = true;
 }
 
@@ -187,7 +189,7 @@ void ScreamV2ServerSingle::run() {
         const uint32_t time = getTimeInNtp();
 
         lock.lock();
-        rtp_queue.push(packet, static_cast<int>(msg->size), SSRC, sequence_number, marker, static_cast<const float>(time) / 65536.0f);
+        rtp_queue.push(packet, static_cast<int>(msg->size), SSRC, sequence_number, marker, static_cast<float>(time) / 65536.0f);
         scream.newMediaFrame(time, SSRC, static_cast<int>(msg->size), marker);
         lock.unlock();
     }
@@ -205,22 +207,22 @@ void ScreamV2ServerSingle::lookup() {
     bool is_marked;
     void *data;
     while (!stop_condition.load(std::memory_order::relaxed)) {
-        const auto start = std::chrono::steady_clock::now();
         lock.lock();
         float can_transmit = scream.isOkToTransmit(getTimeInNtp(), ssrc);
-        while (can_transmit == 0 && rtp_queue.sizeOfQueue() > 0) {
-            if (rtp_queue.pop(&data, size, ssrc, seq, is_marked)) {
-                send(fd, data, size, 0);
-                can_transmit = scream.addTransmitted(getTimeInNtp(), ssrc, size, seq, is_marked);
-            } else {
-                can_transmit = scream.isOkToTransmit(getTimeInNtp(), ssrc);
-            }
+        size_t rtp_queue_size = rtp_queue.sizeOfQueue();
+        lock.unlock();
+        while (can_transmit == 0 && rtp_queue_size > 0) {
+            lock.lock();
+            rtp_queue.pop(&data, size, ssrc, seq, is_marked); // as per rtpqueue sendpacket function
+            send(fd, data, size, 0);
+            can_transmit = scream.addTransmitted(getTimeInNtp(), ssrc, size, seq, is_marked);
+            rtp_queue_size = rtp_queue.sizeOfQueue();
+            lock.unlock();
+            free(data);
         }
 
-        lock.unlock();
-        // std::this_thread::sleep_until(start +
-        // std::chrono::duration<float>(can_transmit > 0 ? can_transmit : 500e-6));
-        std::this_thread::sleep_until(start + std::chrono::microseconds(10));
+        std::this_thread::sleep_for(std::chrono::duration<float>(std::max(can_transmit, 10e-6f)));
+        // std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 }
 
@@ -266,15 +268,19 @@ void ScreamV2ServerSingle::read() {
         lock.lock();
         scream.incomingStandardizedFeedback(time, buffer, static_cast<int>(size));
         msg->size = static_cast<ssize_t>(scream.getTargetBitrate(SSRC));
+        if (msg->size <= 0) {
+            msg->size = static_cast<ssize_t>(scream.getTargetBitrate(SSRC));
+        }
         lock.unlock();
 
-        msg->type = msg->size > 0 ? Msg::BITRATE_REQUEST : Msg::IFRAME_REQUEST;
+        // msg->type = msg->size > 0 ? Msg::BITRATE_REQUEST : Msg::IFRAME_REQUEST;
+        msg->type = Msg::BITRATE_REQUEST;
         forward(msg);
 
         if (time - last_log > 2 * 65536) {
             char log[160];
-            scream.getStatistics(static_cast<const float>(time) / 65536.0f, log);
-            logger::log(logger::INFO, name, ": ", log);
+            scream.getStatistics(static_cast<float>(time) / 65536.0f, log);
+            logger::log(logger::INFO, name, ':', log);
             last_log = time;
         }
     }

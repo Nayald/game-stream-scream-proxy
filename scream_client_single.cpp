@@ -9,6 +9,8 @@ extern "C" {
 
 #include <cstring>
 
+#include <random>
+
 #include "logger.h"
 #include "scream_client_single.h"
 #include "scream_utils.h"
@@ -25,9 +27,6 @@ void ScreamClientSingle::init(const std::unordered_map<std::string, std::string>
 
     sockaddr_in local_addr = {AF_INET, 0, {}, {}};
     sockaddr_in remote_addr = {AF_INET, 0, {}, {}};
-    float max_bitrate = 30e6f;
-    float min_bitrate = 1e6f;
-    float start_bitrate = min_bitrate;
     for (auto const &[key, val] : params) {
         logger::log(logger::DEBUG, name, ": ", key, " = ", val);
         switch (hash(key)) {
@@ -89,11 +88,18 @@ void ScreamClientSingle::init(const std::unordered_map<std::string, std::string>
 }
 
 void ScreamClientSingle::run() {
+    std::thread lookup_thread(&ScreamClientSingle::periodicRtcp, this);
+    logger::log(logger::INFO, name, ": spawn an additional thread for periodic RTCP");
+
     alignas(64) uint8_t buffer[UDP_BUFFER_SIZE];
     iovec rcv_iov = {buffer, sizeof(buffer)};
     uint8_t ctrl_buffer[8192];
     msghdr mhdr = {NULL, 0, &rcv_iov, 1, ctrl_buffer, sizeof(ctrl_buffer), 0};
     uint8_t tos = 0;
+
+    /*std::random_device dev;
+    std::mt19937 rng(dev());
+    std::uniform_real_distribution<float> rand(0, 1);*/
 
     int ret;
     while (!stop_condition.load(std::memory_order::relaxed)) {
@@ -105,18 +111,16 @@ void ScreamClientSingle::run() {
             continue;
         }
 
-        cmsghdr *cmhdr = CMSG_FIRSTHDR(&mhdr);
-        while (cmhdr) {
+        if (ret < 8) {
+            continue;
+        }
+
+        for (cmsghdr *cmhdr = CMSG_FIRSTHDR(&mhdr); cmhdr != nullptr; cmhdr = CMSG_NXTHDR(&mhdr, cmhdr)) {
             if (cmhdr->cmsg_level == IPPROTO_IP && cmhdr->cmsg_type == IP_TOS) {
                 // read the TOS byte in the IP header
                 tos = CMSG_DATA(cmhdr)[0];
                 // logger::log(logger::DEBUG, name, ": tos = ", (int)tos);
             }
-            cmhdr = CMSG_NXTHDR(&mhdr, cmhdr);
-        }
-
-        if (ret < 8) {
-            continue;
         }
 
         /* |-0--2-|-3-|-4-|-5--8-|-9-|-10--16-|-17--31-| (bits)
@@ -131,7 +135,7 @@ void ScreamClientSingle::run() {
 
         const uint16_t sequence_number = bswap_16(*reinterpret_cast<const uint16_t *>(buffer + 2));
         const uint32_t timestamp = bswap_32(*reinterpret_cast<const uint32_t *>(buffer + 4));
-        uint32_t slocal = bswap_32(*reinterpret_cast<const uint32_t *>(buffer + 8));
+        uint32_t ssrc = bswap_32(*reinterpret_cast<const uint32_t *>(buffer + 8));
         const size_t header_size =
             12 + 4 * scrc_count + extension * 4 * bswap_16(*reinterpret_cast<const uint16_t *>(buffer + 12 + 4 * scrc_count + 2));
 
@@ -144,7 +148,7 @@ void ScreamClientSingle::run() {
         << ", payload type=" << (int)payload_type
         << ", sequence number=" << sequence_number
         << ", timestamp=" << timestamp
-        << ", slocal=" << slocal
+        << ", ssrc =" << ssrc
         << ", total header ret=" << header_size
         << std::endl;
         if (marker) {
@@ -158,9 +162,31 @@ void ScreamClientSingle::run() {
         msg->size = ret;
         forward(msg);
 
-        scream.receive(getTimeInNtp(), buffer, SSRC, ret, sequence_number, tos & 0b11, marker);
+        /*if (rand(rng) < 0.02) {
+            tos |= 0x03;
+        }*/
+
+        lock.lock();
+        scream.receive(getTimeInNtp(), 0, SSRC, ret, sequence_number, tos & 0x03, marker);
         if ((scream.checkIfFlushAck() || marker) && scream.createStandardizedFeedback(getTimeInNtp(), marker, buffer, ret)) {
             send(fd, buffer, ret, 0);
         }
+        lock.unlock();
+    }
+}
+
+void ScreamClientSingle::periodicRtcp() {
+    alignas(64) unsigned char buffer[1536];
+    int size;
+    while (!stop_condition.load(std::memory_order::relaxed)) {
+        const uint32_t ntp_time = getTimeInNtp();
+        if (scream.isFeedback(ntp_time) && (scream.checkIfFlushAck() || (ntp_time - scream.getLastFeedbackT() > scream.getRtcpFbInterval()))) {
+            lock.lock();
+            if (scream.createStandardizedFeedback(ntp_time, true, buffer, size)) {
+                send(fd, buffer, size, 0);
+            }
+            lock.unlock();
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
 }

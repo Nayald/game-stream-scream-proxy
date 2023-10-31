@@ -22,9 +22,11 @@ class ScreamClientSingle : public SimpleBlock, public Sink, public Source {
 
   private:
     void run() override;
+    void periodicRtcp();
 
     int fd = -1;
     ScreamRx scream;
+    spinlock lock;
 };
 
 #endif // SCREAM_SCREAMCLIENTSINGLE_H
